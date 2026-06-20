@@ -191,30 +191,46 @@ models_dir = os.path.join(
 def pre_check() -> bool:
     # Use models_dir instead of abs_dir to save to the correct location
     download_directory_path = models_dir
-    
+
     # Make sure the models directory exists, catch permission errors if they occur
     try:
         os.makedirs(download_directory_path, exist_ok=True)
     except OSError as e:
         logging.error(f"Failed to create directory {download_directory_path} due to permission error: {e}")
         return False
-    
-    # Use the direct download URL from Hugging Face (FP32 model for broad GPU compatibility)
+
+    # Avoid attempting a download when the expected model already exists.
+    existing_models = (
+        "inswapper_128.onnx",
+        "inswapper_128_fp16.onnx",
+        "inswapper.onnx",
+    )
+    if any(
+        os.path.exists(os.path.join(download_directory_path, model_name))
+        for model_name in existing_models
+    ):
+        return True
+
+    # Download the documented FP16 model name from the repo's README.
     conditional_download(
         download_directory_path,
         [
-            "https://huggingface.co/hacksider/deep-live-cam/resolve/main/inswapper_128.onnx"
+            "https://huggingface.co/hacksider/deep-live-cam/resolve/main/inswapper_128_fp16.onnx"
         ],
     )
     return True
 
 
 def pre_start() -> bool:
-    # Check for either model variant
+    # Check for the supported model variants used by the project docs.
     fp16_path = os.path.join(models_dir, "inswapper_128_fp16.onnx")
     fp32_path = os.path.join(models_dir, "inswapper_128.onnx")
-    if not os.path.exists(fp16_path) and not os.path.exists(fp32_path):
-        update_status(f"Model not found in {models_dir}. Please download inswapper_128.onnx.", NAME)
+    legacy_path = os.path.join(models_dir, "inswapper.onnx")
+    if not os.path.exists(fp16_path) and not os.path.exists(fp32_path) and not os.path.exists(legacy_path):
+        update_status(
+            f"Model not found in {models_dir}. Please download inswapper_128_fp16.onnx or inswapper_128.onnx.",
+            NAME,
+        )
         return False
 
     # Try to get the face swapper to ensure it loads correctly
@@ -233,15 +249,21 @@ def get_face_swapper() -> Any:
             # Prefer FP16 on GPUs with Tensor Cores (Turing+) — half the
             # memory bandwidth, faster inference.  Fall back to FP32 for
             # older GPUs (e.g. GTX 16xx) where FP16 can produce NaN.
-            fp32_path = os.path.join(models_dir, "inswapper_128.onnx")
             fp16_path = os.path.join(models_dir, "inswapper_128_fp16.onnx")
+            fp32_path = os.path.join(models_dir, "inswapper_128.onnx")
+            legacy_path = os.path.join(models_dir, "inswapper.onnx")
             use_fp16 = _HAS_TORCH_CUDA and os.path.exists(fp16_path)
             if use_fp16:
                 model_path = fp16_path
             elif os.path.exists(fp32_path):
                 model_path = fp32_path
+            elif os.path.exists(legacy_path):
+                model_path = legacy_path
             else:
-                update_status(f"No inswapper model found in {models_dir}.", NAME)
+                update_status(
+                    f"No inswapper model found in {models_dir}. Expected inswapper_128_fp16.onnx, inswapper_128.onnx, or inswapper.onnx.",
+                    NAME,
+                )
                 return None
             # On Apple Silicon, rewrite Pad(reflect) → Slice+Concat so
             # CoreML can run the entire model in a single partition on
