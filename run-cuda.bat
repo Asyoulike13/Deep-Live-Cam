@@ -1,1 +1,4 @@
-python run.py --execution-provider cuda
+@echo
+call venv\scripts\active
+python run.py --execution-provider cpu
+pause

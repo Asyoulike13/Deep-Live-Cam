@@ -466,13 +466,37 @@ def _fast_paste_back(target_img: Frame, bgr_fake: np.ndarray, aimg: np.ndarray, 
     size-scaled erode+blur on the warped mask. Cost is O(crop_area) regardless
     of how much of the frame the face occupies.
     """
+    # Guard against malformed warp data from edge-case faces or partial detections.
+    # In those cases the safest behavior is to leave the frame unchanged.
+    if target_img is None or bgr_fake is None or aimg is None or M is None:
+        return target_img
+
+    if not isinstance(M, np.ndarray):
+        return target_img
+    if M.shape != (2, 3) or not np.isfinite(M).all():
+        return target_img
+
     h, w = target_img.shape[:2]
+    if target_img.ndim != 3 or target_img.shape[2] < 3:
+        return target_img
+
+    if not isinstance(aimg, np.ndarray) or aimg.ndim != 3 or aimg.shape[2] < 3:
+        return target_img
+
     face_h, face_w = aimg.shape[:2]
     # inswapper's aligned-face space is square (128x128). _get_soft_alpha
     # caches a single NxN template keyed by N, so fail loudly if that ever
     # stops being true rather than silently mis-warping the alpha mask.
-    assert face_h == face_w, f"Expected square aligned face, got {face_h}x{face_w}"
-    IM = cv2.invertAffineTransform(M)
+    if face_h != face_w:
+        return target_img
+
+    try:
+        IM = cv2.invertAffineTransform(M)
+    except Exception:
+        return target_img
+
+    if IM is None or not isinstance(IM, np.ndarray) or IM.shape != (2, 3) or not np.isfinite(IM).all():
+        return target_img
 
     # Bbox in output coords from the affine corners of the aligned-face square.
     corners = np.array(
